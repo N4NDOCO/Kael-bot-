@@ -1,15 +1,15 @@
 import discord
 from discord.ext import commands, tasks
 from discord.ui import View, Button
-import os
 from datetime import datetime, timedelta
+import os
 
 # ================= CONFIGURAÇÕES =================
-TOKEN = os.environ["TOKEN"]  # Pegando do Koyeb
+TOKEN = os.environ.get("TOKEN")  # Coloque seu token no Koyeb env vars
 STORE = "World Blox"
 ALLOWED_ROLES = ["Staff", "Mod", "Influencer", "Farmer", "Entregador"]
 
-# Normalização de nomes dos trabalhadores
+# ================= TRABALHADORES / UPADORES =================
 WORKERS = {
     "n4ndin": "Nandin", "nandin": "Nandin",
     "lucas": "Lucas", "ℒ𝓊𝒸𝒶𝓈 ℒ𝓊𝒾𝓏".lower(): "Lucas",
@@ -21,11 +21,7 @@ WORKERS = {
 }
 
 # ================= PIX =================
-PIX_KEYS = {
-    "Nandin": "85996242996",
-    "Lucas": "85991202668",
-    "Eduardo": "world.blox018@gmail.com"
-}
+PIX_KEY = "world.blox018@gmail.com"  # PIX da loja
 
 # ================= PRODUTOS =================
 PRODUCTS = {
@@ -47,8 +43,10 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================= GANHOS =================
-daily_earnings = {}   # Reset diário
-total_earnings = {}   # Reset mensal
+daily_earnings = {}   # Reseta todo dia
+total_earnings = {}   # Reseta todo mês
+store_total = 0       # Total da loja (soma de todos os vendedores/upadores)
+
 daily_reset = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(days=32)
 
@@ -58,7 +56,7 @@ def normalize(name: str) -> str:
 def has_role(member, allowed_roles):
     return any(role.name in allowed_roles for role in member.roles)
 
-# ================= EVENTOS =================
+# ================= EVENTO DE READY =================
 @bot.event
 async def on_ready():
     await bot.change_presence(
@@ -68,7 +66,7 @@ async def on_ready():
     daily_report.start()
     print(f"{bot.user} online!")
 
-# ================= COMANDOS =================
+# ================= COMANDO /CONTAS =================
 @bot.tree.command(name="contas", description="Ver contas disponíveis")
 async def contas(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -86,7 +84,34 @@ async def contas(interaction: discord.Interaction):
     await interaction.user.send(embed=embed, view=view)
     await interaction.response.send_message("📩 Te mandei as contas no privado!", ephemeral=True)
 
-# ================= BOTÃO VERIFY =================
+# ================= BOTÃO DE COMPRA =================
+class PurchaseView(View):
+    def __init__(self, buyer: discord.User, product: str):
+        super().__init__(timeout=None)
+        self.buyer = buyer
+        self.product = product
+
+    @discord.ui.button(label="Comprar", style=discord.ButtonStyle.green)
+    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "📦 Verificando conta em Stock\n⏰ Aguarde um momento...", ephemeral=True
+        )
+
+        await self.buyer.send(
+            f"✅ Conta disponível será enviada pós pagamento.\n💸 Chave Pix: {PIX_KEY}"
+        )
+
+        # Cria botão de verificação no canal VERIFY_CHANNEL
+        guild = interaction.guild
+        verify_ch = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
+        if verify_ch:
+            view = VerifyView(buyer=self.buyer, product=self.product, seller=interaction.user)
+            await verify_ch.send(
+                content=f"💰 Pedido de verificação para **{self.product}** do usuário {self.buyer.mention}",
+                view=view
+            )
+
+# ================= BOTÃO DE VERIFY =================
 class VerifyView(View):
     def __init__(self, buyer: discord.User, product: str, seller: discord.Member):
         super().__init__(timeout=None)
@@ -94,74 +119,83 @@ class VerifyView(View):
         self.product = product
         self.seller = seller
 
-    @discord.ui.button(label="Verify Buying", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Verificar Pagamento", style=discord.ButtonStyle.blurple)
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not has_role(interaction.user, ALLOWED_ROLES):
             return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
         guild = interaction.guild
-        price, channel_name = PRODUCTS[self.product]
-        stock_channel = discord.utils.get(guild.text_channels, name=channel_name)
-
+        price, stock_channel_name = PRODUCTS[self.product]
+        stock_channel = discord.utils.get(guild.text_channels, name=stock_channel_name)
         msgs = [m async for m in stock_channel.history(limit=10)]
         if not msgs:
             return await interaction.response.send_message("❌ Sem stock.", ephemeral=True)
 
         msg = msgs[0]
         lines = msg.content.splitlines()
-
         upador_raw = lines[0].strip()
         upador = normalize(upador_raw)
-        usuario = lines[2].split(":", 1)[1].strip()
-        senha = lines[3].split(":", 1)[1].strip()
-        pix_upador = PIX_KEYS.get(upador, None)
+        usuario = lines[2].split(":",1)[1].strip()
+        senha = lines[3].split(":",1)[1].strip()
 
-        # Atualiza ganhos do upador
-        daily_earnings[upador] = daily_earnings.get(upador, 0) + price
-        total_earnings[upador] = total_earnings.get(upador, 0) + price
+        # Distribui lucros
+        upador_gain = price * 0.8
+        seller_gain = price * 0.2
 
-        # Comissão do vendedor
+        daily_earnings[upador] = daily_earnings.get(upador,0) + upador_gain
+        total_earnings[upador] = total_earnings.get(upador,0) + upador_gain
+
         seller_name = normalize(self.seller.name)
-        comissao = price * 0.2
-        daily_earnings[seller_name] = daily_earnings.get(seller_name, 0) + comissao
-        total_earnings[seller_name] = total_earnings.get(seller_name, 0) + comissao
+        daily_earnings[seller_name] = daily_earnings.get(seller_name,0) + seller_gain
+        total_earnings[seller_name] = total_earnings.get(seller_name,0) + seller_gain
+
+        global store_total
+        store_total += price
 
         await msg.delete()
 
-        dm_message = f"""✅ **Compra Concluída — {STORE}**
+        # Mensagem para o vendedor
+        await interaction.response.send_message(
+            f"✅ Pix caiu boa compra.\n\n"
+            f"📦 Sua conta está saindo para a entrega.\n"
+            f"⏳ Prazo de até 2 dias.\n\n"
+            f"🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.",
+            ephemeral=True
+        )
 
-👤 Usuário: `{usuario}`
-🔐 Senha: `{senha}`
-💳 Pagamento via PIX: `{pix_upador}`
-"""
-        await self.buyer.send(dm_message)
+        # Envia a conta pro cliente
+        await self.buyer.send(f"📦 Sua conta:\nUsuário: `{usuario}`\nSenha: `{senha}`")
 
-        verify_ch = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
-        if verify_ch:
-            await verify_ch.send(
-                f"📦 **Conta entregue**\nUpador: **{upador}**\nVendedor: **{seller_name}**\nProduto: {self.product}\nPreço: {price}\nComissão Vendedor: {comissao:.2f}"
-            )
-
-        await interaction.response.send_message("✅ Conta entregue com sucesso!", ephemeral=True)
-
-# ================= RELATÓRIOS =================
-@bot.tree.command(name="venda", description="Ver vendas diárias e totais")
+# ================= /VENDA =================
+@bot.tree.command(name="venda", description="Ver seus ganhos")
 async def venda(interaction: discord.Interaction):
+    user_name = normalize(interaction.user.name)
     if not has_role(interaction.user, ALLOWED_ROLES):
         return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    text = f"📊 **Relatório Diário — {STORE}**\n\n"
-    for p in daily_earnings:
-        text += f"**{p}**\nDiária: R$ {daily_earnings[p]:.2f}\nTotal: R$ {total_earnings.get(p,0):.2f}\n\n"
-    ch = discord.utils.get(interaction.guild.text_channels, name=REPORT_CHANNEL)
-    if ch:
-        await ch.send(text)
-    await interaction.response.send_message("✅ Relatório enviado!", ephemeral=True)
+    diaria = daily_earnings.get(user_name,0)
+    total = total_earnings.get(user_name,0)
 
-# ================= TAREFA DIÁRIA =================
+    text = f"📊 **Relatório — {user_name}**\n\n"
+    text += f"💰 Diária: R$ {diaria:.2f}\n"
+    text += f"💵 Total: R$ {total:.2f}\n"
+
+    await interaction.response.send_message(text, ephemeral=True)
+
+# ================= /RELATORIO =================
+@bot.tree.command(name="relatorio", description="Relatório da loja")
+async def relatorio(interaction: discord.Interaction):
+    if not has_role(interaction.user, ALLOWED_ROLES):
+        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+
+    text = f"📊 **Relatório da Loja — {STORE}**\n\n"
+    text += f"💵 Total acumulado do mês: R$ {store_total:.2f}\n"
+    await interaction.response.send_message(text, ephemeral=True)
+
+# ================= RESET DIÁRIO E MENSAL =================
 @tasks.loop(minutes=1)
 async def daily_report():
-    global daily_reset, monthly_reset
+    global daily_reset, monthly_reset, store_total
     now = datetime.utcnow()
     if now >= daily_reset:
         for k in daily_earnings:
@@ -171,6 +205,7 @@ async def daily_report():
     if now >= monthly_reset:
         for k in total_earnings:
             total_earnings[k] = 0
+        store_total = 0
         monthly_reset += timedelta(days=32)
 
 bot.run(TOKEN)
