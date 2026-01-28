@@ -7,7 +7,8 @@ import os
 # ================= CONFIGURAÇÕES =================
 TOKEN = os.environ.get("TOKEN")  # Coloque seu token no Koyeb env vars
 STORE = "World Blox"
-ALLOWED_ROLES = ["Staff", "Mod", "Influencer", "Farmer", "Entregador"]
+
+ALLOWED_ROLES = ["Staff", "Mod", "Entregador", "Farmer", "Influencer"]
 
 # ================= TRABALHADORES / UPADORES =================
 WORKERS = {
@@ -21,7 +22,7 @@ WORKERS = {
 }
 
 # ================= PIX =================
-PIX_KEY = "world.blox018@gmail.com"  # PIX da loja
+PIX_KEY = "world.blox018@gmail.com"
 
 # ================= PRODUTOS =================
 PRODUCTS = {
@@ -43,9 +44,9 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================= GANHOS =================
-daily_earnings = {}   # Reseta todo dia
-total_earnings = {}   # Reseta todo mês
-store_total = 0       # Total da loja (soma de todos os vendedores/upadores)
+daily_earnings = {}   
+total_earnings = {}  
+store_total = 0       
 
 daily_reset = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(days=32)
@@ -53,8 +54,8 @@ monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, mic
 def normalize(name: str) -> str:
     return WORKERS.get(name.lower(), name)
 
-def has_role(member, allowed_roles):
-    return any(role.name in allowed_roles for role in member.roles)
+def has_allowed_role(member: discord.Member) -> bool:
+    return any(r.name in ALLOWED_ROLES for r in member.roles)
 
 # ================= EVENTO DE READY =================
 @bot.event
@@ -94,14 +95,13 @@ class PurchaseView(View):
     @discord.ui.button(label="Comprar", style=discord.ButtonStyle.green)
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "📦 Verificando conta em Stock\n⏰ Aguarde um momento...", ephemeral=True
+            "📦 Verificando conta em Stock ⏰ Aguarde...", ephemeral=True
         )
 
         await self.buyer.send(
             f"✅ Conta disponível será enviada pós pagamento.\n💸 Chave Pix: {PIX_KEY}"
         )
 
-        # Cria botão de verificação no canal VERIFY_CHANNEL
         guild = interaction.guild
         verify_ch = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
         if verify_ch:
@@ -121,7 +121,7 @@ class VerifyView(View):
 
     @discord.ui.button(label="Verificar Pagamento", style=discord.ButtonStyle.blurple)
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not has_role(interaction.user, ALLOWED_ROLES):
+        if not has_allowed_role(interaction.user):
             return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
         guild = interaction.guild
@@ -138,7 +138,7 @@ class VerifyView(View):
         usuario = lines[2].split(":",1)[1].strip()
         senha = lines[3].split(":",1)[1].strip()
 
-        # Distribui lucros
+        # Distribui lucros 80/20
         upador_gain = price * 0.8
         seller_gain = price * 0.2
 
@@ -154,43 +154,26 @@ class VerifyView(View):
 
         await msg.delete()
 
-        # Mensagem para o vendedor
         await interaction.response.send_message(
-            f"✅ Pix caiu boa compra.\n\n"
-            f"📦 Sua conta está saindo para a entrega.\n"
-            f"⏳ Prazo de até 2 dias.\n\n"
-            f"🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.",
+            f"✅ Pix caiu boa compra.\n📦 Sua conta está saindo para a entrega.\n⏳ Prazo de até 2 dias.\n🚨 Caso sua conta possua 2FA, informe Staff/Entregador/Farmer.",
             ephemeral=True
         )
 
-        # Envia a conta pro cliente
         await self.buyer.send(f"📦 Sua conta:\nUsuário: `{usuario}`\nSenha: `{senha}`")
 
-# ================= /VENDA =================
-@bot.tree.command(name="venda", description="Ver seus ganhos")
-async def venda(interaction: discord.Interaction):
-    user_name = normalize(interaction.user.name)
-    if not has_role(interaction.user, ALLOWED_ROLES):
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
-
-    diaria = daily_earnings.get(user_name,0)
-    total = total_earnings.get(user_name,0)
-
-    text = f"📊 **Relatório — {user_name}**\n\n"
-    text += f"💰 Diária: R$ {diaria:.2f}\n"
-    text += f"💵 Total: R$ {total:.2f}\n"
-
-    await interaction.response.send_message(text, ephemeral=True)
-
 # ================= /RELATORIO =================
-@bot.tree.command(name="relatorio", description="Relatório da loja")
+@bot.tree.command(name="relatorio", description="Relatório de ganhos")
 async def relatorio(interaction: discord.Interaction):
-    if not has_role(interaction.user, ALLOWED_ROLES):
+    if not has_allowed_role(interaction.user):
         return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    text = f"📊 **Relatório da Loja — {STORE}**\n\n"
-    text += f"💵 Total acumulado do mês: R$ {store_total:.2f}\n"
-    await interaction.response.send_message(text, ephemeral=True)
+    text = f"📊 **Relatório — {STORE}**\n\n"
+    for user, total in total_earnings.items():
+        diaria = daily_earnings.get(user,0)
+        text += f"👤 {user} — Diária: R$ {diaria:.2f} | Total: R$ {total:.2f}\n"
+    text += f"\n💵 Total acumulado da loja (mensal): R$ {store_total:.2f}"
+
+    await interaction.response.send_message(text)
 
 # ================= RESET DIÁRIO E MENSAL =================
 @tasks.loop(minutes=1)
