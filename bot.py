@@ -5,12 +5,10 @@ from datetime import datetime, timedelta
 import os
 
 # ================= CONFIGURAÇÕES =================
-TOKEN = os.environ.get("TOKEN")  # Coloque seu token no Koyeb env vars
+TOKEN = os.environ.get("TOKEN")  # Coloque seu token no environment variable
 STORE = "World Blox"
-
 ALLOWED_ROLES = ["Staff", "Mod", "Entregador", "Farmer", "Influencer"]
 
-# ================= TRABALHADORES / UPADORES =================
 WORKERS = {
     "n4ndin": "Nandin", "nandin": "Nandin",
     "lucas": "Lucas", "ℒ𝓊𝒸𝒶𝓈 ℒ𝓊𝒾𝓏".lower(): "Lucas",
@@ -21,10 +19,8 @@ WORKERS = {
     "eduardo": "Eduardo", "edu": "Eduardo"
 }
 
-# ================= PIX =================
 PIX_KEY = "world.blox018@gmail.com"
 
-# ================= PRODUTOS =================
 PRODUCTS = {
     "God Human": (20, "📦┃stock-god-human"),
     "Dragon Talon v2 (Evo)": (15, "📦┃stock-dragon-talon"),
@@ -43,10 +39,9 @@ REPORT_CHANNEL = "📊┃relatorio-vendas"
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ================= GANHOS =================
-daily_earnings = {}   
-total_earnings = {}  
-store_total = 0       
+daily_earnings = {}
+total_earnings = {}
+store_total = 0
 
 daily_reset = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(days=32)
@@ -57,7 +52,7 @@ def normalize(name: str) -> str:
 def has_allowed_role(member: discord.Member) -> bool:
     return any(r.name in ALLOWED_ROLES for r in member.roles)
 
-# ================= EVENTO DE READY =================
+# ================= EVENTOS =================
 @bot.event
 async def on_ready():
     await bot.change_presence(
@@ -67,7 +62,7 @@ async def on_ready():
     daily_report.start()
     print(f"{bot.user} online!")
 
-# ================= COMANDO /CONTAS =================
+# ================= COMANDO /contas =================
 @bot.tree.command(name="contas", description="Ver contas disponíveis")
 async def contas(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -78,31 +73,41 @@ async def contas(interaction: discord.Interaction):
     for p, (price, _) in PRODUCTS.items():
         embed.add_field(name=p, value=f"💰 R$ {price}", inline=False)
 
-    view = View()
+    view = View(timeout=60)  # Timeout de 60 segundos
     for product in PRODUCTS:
         view.add_item(Button(label=product, style=discord.ButtonStyle.primary, custom_id=f"buy_{product}"))
 
-    await interaction.user.send(embed=embed, view=view)
+    dm_message = "📦 Contas disponíveis:\n\n"
+    for p, (price, _) in PRODUCTS.items():
+        dm_message += f"- {p} — R$ {price}\n"
+    dm_message += "\n🚨 Botão de compra se expira em 60 segundos! 🚨"
+
+    await interaction.user.send(dm_message, view=view)
     await interaction.response.send_message("📩 Te mandei as contas no privado!", ephemeral=True)
 
 # ================= BOTÃO DE COMPRA =================
 class PurchaseView(View):
     def __init__(self, buyer: discord.User, product: str):
-        super().__init__(timeout=None)
+        super().__init__(timeout=30)
         self.buyer = buyer
         self.product = product
 
     @discord.ui.button(label="Comprar", style=discord.ButtonStyle.green)
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "📦 Verificando conta em Stock ⏰ Aguarde...", ephemeral=True
-        )
+        await interaction.response.send_message("📦 Verificando conta em Stock ⏰ Aguarde...", ephemeral=True)
 
-        await self.buyer.send(
-            f"✅ Conta disponível será enviada pós pagamento.\n💸 Chave Pix: {PIX_KEY}"
-        )
-
+        # Checa stock
         guild = interaction.guild
+        price, stock_channel_name = PRODUCTS[self.product]
+        stock_channel = discord.utils.get(guild.text_channels, name=stock_channel_name)
+        msgs = [m async for m in stock_channel.history(limit=10)]
+        if not msgs:
+            await self.buyer.send("🚫 Conta fora de Stock ⏳ Aguarde ficar disponível")
+            return
+
+        await self.buyer.send(f"✅ Conta disponível será enviada pós o pagamento.\n💸 Chave Pix: {PIX_KEY}")
+
+        # Manda botão de verificação
         verify_ch = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
         if verify_ch:
             view = VerifyView(buyer=self.buyer, product=self.product, seller=interaction.user)
@@ -138,9 +143,13 @@ class VerifyView(View):
         usuario = lines[2].split(":",1)[1].strip()
         senha = lines[3].split(":",1)[1].strip()
 
-        # Distribui lucros 80/20
-        upador_gain = price * 0.8
-        seller_gain = price * 0.2
+        # Lucros
+        if normalize(interaction.user.name) == upador:
+            upador_gain = price
+            seller_gain = 0
+        else:
+            upador_gain = price * 0.8
+            seller_gain = price * 0.2
 
         daily_earnings[upador] = daily_earnings.get(upador,0) + upador_gain
         total_earnings[upador] = total_earnings.get(upador,0) + upador_gain
@@ -155,14 +164,33 @@ class VerifyView(View):
         await msg.delete()
 
         await interaction.response.send_message(
-            f"✅ Pix caiu boa compra.\n📦 Sua conta está saindo para a entrega.\n⏳ Prazo de até 2 dias.\n🚨 Caso sua conta possua 2FA, informe Staff/Entregador/Farmer.",
+            "✅ Pix caiu boa compra.\n\n**📦 Sua conta está saindo para a entrega.**\n⏳ Prazo de até 2 Dias.\n\n🚨 Caso possua verificação de 2 etapas, informe Staff/Entregador/Farmer",
             ephemeral=True
         )
 
         await self.buyer.send(f"📦 Sua conta:\nUsuário: `{usuario}`\nSenha: `{senha}`")
 
-# ================= /RELATORIO =================
-@bot.tree.command(name="relatorio", description="Relatório de ganhos")
+# ================= COMANDO /vendas =================
+@bot.tree.command(name="vendas", description="Ver vendas recentes")
+async def vendas(interaction: discord.Interaction):
+    if not has_allowed_role(interaction.user):
+        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+
+    text = f"📊 **Vendas recentes — {STORE}**\n\n"
+    for user, total in total_earnings.items():
+        diaria = daily_earnings.get(user,0)
+        text += f"👤 {user} — Diária: R$ {diaria:.2f} | Total: R$ {total:.2f}\n"
+    text += f"\n💵 Total acumulado da loja (mensal): R$ {store_total:.2f}"
+
+    ch = discord.utils.get(interaction.guild.text_channels, name=REPORT_CHANNEL)
+    if ch:
+        await ch.send(text)
+        await interaction.response.send_message(f"✅ Relatório enviado em {ch.mention}", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Canal de relatório não encontrado.", ephemeral=True)
+
+# ================= COMANDO /relatorio =================
+@bot.tree.command(name="relatorio", description="Resumo de ganhos")
 async def relatorio(interaction: discord.Interaction):
     if not has_allowed_role(interaction.user):
         return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
@@ -173,7 +201,12 @@ async def relatorio(interaction: discord.Interaction):
         text += f"👤 {user} — Diária: R$ {diaria:.2f} | Total: R$ {total:.2f}\n"
     text += f"\n💵 Total acumulado da loja (mensal): R$ {store_total:.2f}"
 
-    await interaction.response.send_message(text)
+    ch = discord.utils.get(interaction.guild.text_channels, name=REPORT_CHANNEL)
+    if ch:
+        await ch.send(text)
+        await interaction.response.send_message(f"✅ Relatório enviado em {ch.mention}", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Canal de relatório não encontrado.", ephemeral=True)
 
 # ================= RESET DIÁRIO E MENSAL =================
 @tasks.loop(minutes=1)
