@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 # ================= CONFIGURAÇÕES =================
 TOKEN = os.environ["TOKEN"]  # Pegando do Koyeb
-
 STORE = "World Blox"
 ALLOWED_ROLES = ["Staff", "Mod", "Influencer", "Farmer", "Entregador"]
 
@@ -50,7 +49,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ================= GANHOS =================
 daily_earnings = {}   # Reset diário
 total_earnings = {}   # Reset mensal
-
 daily_reset = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(days=32)
 
@@ -64,10 +62,7 @@ def has_role(member, allowed_roles):
 @bot.event
 async def on_ready():
     await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.playing,
-            name=f"Vendendo contas | {STORE}"
-        )
+        activity=discord.Activity(type=discord.ActivityType.playing, name=f"Vendendo contas | {STORE}")
     )
     await bot.tree.sync()
     daily_report.start()
@@ -119,14 +114,13 @@ class VerifyView(View):
         upador = normalize(upador_raw)
         usuario = lines[2].split(":", 1)[1].strip()
         senha = lines[3].split(":", 1)[1].strip()
-
         pix_upador = PIX_KEYS.get(upador, None)
 
-        # Atualiza ganhos
+        # Atualiza ganhos do upador
         daily_earnings[upador] = daily_earnings.get(upador, 0) + price
         total_earnings[upador] = total_earnings.get(upador, 0) + price
 
-        # Comissão vendedor
+        # Comissão do vendedor
         seller_name = normalize(self.seller.name)
         comissao = price * 0.2
         daily_earnings[seller_name] = daily_earnings.get(seller_name, 0) + comissao
