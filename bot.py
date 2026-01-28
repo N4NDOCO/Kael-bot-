@@ -1,162 +1,182 @@
 import discord
-from discord.ext import commands
-import json
+from discord.ext import commands, tasks
+from discord.ui import View, Button
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+# ================= CONFIGURAÇÕES =================
+TOKEN = os.environ["TOKEN"]  # Pegando do Koyeb
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="/", intents=intents)
+STORE = "World Blox"
+ALLOWED_ROLES = ["Staff", "Mod", "Influencer", "Farmer", "Entregador"]
 
-VENDAS_FILE = "vendas.json"
-CANAL_RELATORIO = "📊┃relatorio-vendas"
-COMISSAO_PERCENT = 0.20
+# Normalização de nomes dos trabalhadores
+WORKERS = {
+    "n4ndin": "Nandin", "nandin": "Nandin",
+    "lucas": "Lucas", "ℒ𝓊𝒸𝒶𝓈 ℒ𝓊𝒾𝓏".lower(): "Lucas",
+    "scther541": "Dionata", "dionata": "Dionata",
+    "mklon15": "Mikhayas", "mikhayas": "Mikhayas",
+    "__xblaster": "Kaio", "kaio": "Kaio",
+    "ramixz": "Ramilson", "ramilson": "Ramilson",
+    "eduardo": "Eduardo", "edu": "Eduardo"
+}
 
-CARGOS_PERMITIDOS = [
-    "Staff",
-    "Mod",
-    "Influencer",
-    "Farmer",
-    "Entregador"
-]
+# ================= PIX =================
+PIX_KEYS = {
+    "Nandin": "85996242996",
+    "Lucas": "85991202668",
+    "Eduardo": "world.blox018@gmail.com"
+}
 
-# ================= UTIL =================
-def carregar_vendas():
-    if not os.path.exists(VENDAS_FILE):
-        return []
-    with open(VENDAS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+# ================= PRODUTOS =================
+PRODUCTS = {
+    "God Human": (20, "📦┃stock-god-human"),
+    "Dragon Talon v2 (Evo)": (15, "📦┃stock-dragon-talon"),
+    "Sharkman Karatê v2 (Evo)": (15, "📦┃stock-sharkman"),
+    "Electric Claw": (10, "📦┃stock-electric-claw"),
+    "Level Max (2800)": (8, "📦┃stock-level-max"),
+    "100 Milhões de Berries": (20, "📦┃stock-berries"),
+    "Fruta no Inv": (12, "📦┃stock-fruta-inv"),
+    "Conta Tudo Random": (10, "📦┃stock-random")
+}
 
-def salvar_vendas(vendas):
-    with open(VENDAS_FILE, "w", encoding="utf-8") as f:
-        json.dump(vendas, f, indent=4, ensure_ascii=False)
+VERIFY_CHANNEL = "✅┃verificar-pagamentos"
+REPORT_CHANNEL = "📊┃relatorio-vendas"
 
-def tem_permissao(member: discord.Member):
-    return any(cargo.name in CARGOS_PERMITIDOS for cargo in member.roles)
+# ================= BOT =================
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ================= EVENT =================
+# ================= GANHOS =================
+daily_earnings = {}   # Reset diário
+total_earnings = {}   # Reset mensal
+
+daily_reset = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+monthly_reset = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(days=32)
+
+def normalize(name: str) -> str:
+    return WORKERS.get(name.lower(), name)
+
+def has_role(member, allowed_roles):
+    return any(role.name in allowed_roles for role in member.roles)
+
+# ================= EVENTOS =================
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot online como {bot.user}")
-
-# ================= CONTAS (LIVRE) =================
-@bot.command(name="contas")
-async def contas(ctx):
-    embed = discord.Embed(
-        title="🏪 Contas Disponíveis",
-        description="Entre em contato com a equipe para comprar.",
-        color=discord.Color.gold()
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.playing,
+            name=f"Vendendo contas | {STORE}"
+        )
     )
+    await bot.tree.sync()
+    daily_report.start()
+    print(f"{bot.user} online!")
 
-    embed.add_field(name="God Human", value="R$ 20", inline=False)
-    embed.add_field(name="Dragon Talon v2", value="R$ 15", inline=False)
-    embed.add_field(name="Sharkman v2", value="R$ 15", inline=False)
-    embed.add_field(name="Electric Claw", value="R$ 10", inline=False)
-    embed.add_field(name="Level Max (2800)", value="R$ 8", inline=False)
+# ================= COMANDOS =================
+@bot.tree.command(name="contas", description="Ver contas disponíveis")
+async def contas(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title=f"🏪 {STORE} — Contas Blox Fruits",
+        description="Clique no botão da conta que deseja comprar.",
+        color=0x9b59b6
+    )
+    for p, (price, _) in PRODUCTS.items():
+        embed.add_field(name=p, value=f"💰 R$ {price}", inline=False)
 
-    await ctx.author.send(embed=embed)
-    await ctx.send("📩 Te mandei as contas no privado!")
+    view = View()
+    for product in PRODUCTS:
+        view.add_item(Button(label=product, style=discord.ButtonStyle.primary, custom_id=f"buy_{product}"))
 
-# ================= REGISTRAR VENDA =================
-@bot.command(name="venda")
-async def venda(ctx, *, dados: str):
-    if not tem_permissao(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
-        return
+    await interaction.user.send(embed=embed, view=view)
+    await interaction.response.send_message("📩 Te mandei as contas no privado!", ephemeral=True)
 
-    try:
-        partes = [p.strip() for p in dados.split("|")]
-        conta = partes[0]
-        preco = float(partes[1])
-        vendedor = partes[2]
+# ================= BOTÃO VERIFY =================
+class VerifyView(View):
+    def __init__(self, buyer: discord.User, product: str, seller: discord.Member):
+        super().__init__(timeout=None)
+        self.buyer = buyer
+        self.product = product
+        self.seller = seller
 
-        comissao = round(preco * COMISSAO_PERCENT, 2)
-        lucro = round(preco - comissao, 2)
+    @discord.ui.button(label="Verify Buying", style=discord.ButtonStyle.green)
+    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not has_role(interaction.user, ALLOWED_ROLES):
+            return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    except Exception:
-        await ctx.send("❌ Use: `/venda Conta | PREÇO | @Vendedor`")
-        return
+        guild = interaction.guild
+        price, channel_name = PRODUCTS[self.product]
+        stock_channel = discord.utils.get(guild.text_channels, name=channel_name)
 
-    venda_data = {
-        "conta": conta,
-        "preco": preco,
-        "vendedor": vendedor,
-        "comissao": comissao,
-        "lucro": lucro,
-        "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-    }
+        msgs = [m async for m in stock_channel.history(limit=10)]
+        if not msgs:
+            return await interaction.response.send_message("❌ Sem stock.", ephemeral=True)
 
-    vendas = carregar_vendas()
-    vendas.append(venda_data)
-    salvar_vendas(vendas)
+        msg = msgs[0]
+        lines = msg.content.splitlines()
 
-    canal = discord.utils.get(ctx.guild.text_channels, name=CANAL_RELATORIO)
-    if canal:
-        embed = discord.Embed(title="💰 Venda Registrada", color=discord.Color.green())
-        embed.add_field(name="📦 Conta", value=conta, inline=False)
-        embed.add_field(name="💵 Preço", value=f"R$ {preco}", inline=True)
-        embed.add_field(name="👤 Vendedor", value=vendedor, inline=True)
-        embed.add_field(name="💸 Comissão (20%)", value=f"R$ {comissao}", inline=True)
-        embed.add_field(name="📈 Lucro", value=f"R$ {lucro}", inline=True)
-        await canal.send(embed=embed)
+        upador_raw = lines[0].strip()
+        upador = normalize(upador_raw)
+        usuario = lines[2].split(":", 1)[1].strip()
+        senha = lines[3].split(":", 1)[1].strip()
 
-    await ctx.send("✅ Venda registrada com sucesso!")
+        pix_upador = PIX_KEYS.get(upador, None)
 
-# ================= COMISSÃO =================
-@bot.command(name="comissao")
-async def comissao(ctx, *, vendedor: str):
-    if not tem_permissao(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
-        return
+        # Atualiza ganhos
+        daily_earnings[upador] = daily_earnings.get(upador, 0) + price
+        total_earnings[upador] = total_earnings.get(upador, 0) + price
 
-    vendas = carregar_vendas()
-    total_vendas = 0
-    total_comissao = 0
-    total_valor = 0
+        # Comissão vendedor
+        seller_name = normalize(self.seller.name)
+        comissao = price * 0.2
+        daily_earnings[seller_name] = daily_earnings.get(seller_name, 0) + comissao
+        total_earnings[seller_name] = total_earnings.get(seller_name, 0) + comissao
 
-    for v in vendas:
-        if vendedor.lower() in v["vendedor"].lower():
-            total_vendas += 1
-            total_comissao += v["comissao"]
-            total_valor += v["preco"]
+        await msg.delete()
 
-    if total_vendas == 0:
-        await ctx.send("❌ Nenhuma venda encontrada.")
-        return
+        dm_message = f"""✅ **Compra Concluída — {STORE}**
 
-    embed = discord.Embed(title="💸 Comissão do Vendedor", color=discord.Color.blue())
-    embed.add_field(name="👤 Vendedor", value=vendedor, inline=False)
-    embed.add_field(name="📦 Vendas", value=total_vendas, inline=True)
-    embed.add_field(name="💵 Total Vendido", value=f"R$ {total_valor}", inline=True)
-    embed.add_field(name="💰 Comissão", value=f"R$ {round(total_comissao,2)}", inline=True)
+👤 Usuário: `{usuario}`
+🔐 Senha: `{senha}`
+💳 Pagamento via PIX: `{pix_upador}`
+"""
+        await self.buyer.send(dm_message)
 
-    await ctx.send(embed=embed)
+        verify_ch = discord.utils.get(guild.text_channels, name=VERIFY_CHANNEL)
+        if verify_ch:
+            await verify_ch.send(
+                f"📦 **Conta entregue**\nUpador: **{upador}**\nVendedor: **{seller_name}**\nProduto: {self.product}\nPreço: {price}\nComissão Vendedor: {comissao:.2f}"
+            )
 
-# ================= RELATÓRIO =================
-@bot.command(name="relatorio")
-async def relatorio(ctx):
-    if not tem_permissao(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
-        return
+        await interaction.response.send_message("✅ Conta entregue com sucesso!", ephemeral=True)
 
-    vendas = carregar_vendas()
-    if not vendas:
-        await ctx.send("❌ Nenhuma venda registrada.")
-        return
+# ================= RELATÓRIOS =================
+@bot.tree.command(name="venda", description="Ver vendas diárias e totais")
+async def venda(interaction: discord.Interaction):
+    if not has_role(interaction.user, ALLOWED_ROLES):
+        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
 
-    faturamento = sum(v["preco"] for v in vendas)
-    total_comissao = sum(v["comissao"] for v in vendas)
-    lucro = sum(v["lucro"] for v in vendas)
+    text = f"📊 **Relatório Diário — {STORE}**\n\n"
+    for p in daily_earnings:
+        text += f"**{p}**\nDiária: R$ {daily_earnings[p]:.2f}\nTotal: R$ {total_earnings.get(p,0):.2f}\n\n"
+    ch = discord.utils.get(interaction.guild.text_channels, name=REPORT_CHANNEL)
+    if ch:
+        await ch.send(text)
+    await interaction.response.send_message("✅ Relatório enviado!", ephemeral=True)
 
-    embed = discord.Embed(title="📊 Relatório Geral", color=discord.Color.purple())
-    embed.add_field(name="📦 Vendas", value=len(vendas), inline=False)
-    embed.add_field(name="💵 Faturamento", value=f"R$ {round(faturamento,2)}", inline=True)
-    embed.add_field(name="💸 Comissões", value=f"R$ {round(total_comissao,2)}", inline=True)
-    embed.add_field(name="📈 Lucro", value=f"R$ {round(lucro,2)}", inline=True)
+# ================= TAREFA DIÁRIA =================
+@tasks.loop(minutes=1)
+async def daily_report():
+    global daily_reset, monthly_reset
+    now = datetime.utcnow()
+    if now >= daily_reset:
+        for k in daily_earnings:
+            daily_earnings[k] = 0
+        daily_reset += timedelta(days=1)
 
-    await ctx.send(embed=embed)
+    if now >= monthly_reset:
+        for k in total_earnings:
+            total_earnings[k] = 0
+        monthly_reset += timedelta(days=32)
 
-# ================= START =================
 bot.run(TOKEN)
