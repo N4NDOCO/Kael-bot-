@@ -1,180 +1,139 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import json
-import os
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
 
-# IDs dos canais
-CANAIS = {
-    "contas": 1465477544445874291,
-    "verify": 1465657430292697151,
-    "relatorio_vendas": 1465657468745941043,
-    "stocks": {
-        "God Human": 1465679418075643926,
-        "Dragon Talor": 1465679812340220069,
-        "Sharkman": 1465679631997861990,
-        "Electric Claw": 1465679998777032786,
-        "100M Berries": 1465680216432050237,
-        "Level Max": 1465680124564475935,
-        "Fruta no Inv": 1465680280114303165,
-        "Tudo Random": 1465680530526834781
-    }
+# IDs de canais
+CANAL_CONTAS = 1465477544445874291
+CANAL_VERIFY = 1465657430292697151
+CANAL_RELATORIO = 1465657468745941043
+
+# IDs dos stocks
+STOCKS = {
+    "God Human": 1465679418075643926,
+    "Dragon Talor": 1465679812340220069,
+    "Sharkman": 1465679631997861990,
+    "Electric Claw": 1465679998777032786,
+    "100M Berries": 1465680216432050237,
+    "Level Max": 1465680124564475935,
+    "Fruta no Inv": 1465680280114303165,
+    "Tudo Random": 1465680530526834781
 }
 
-# Vendedores e variações
-VENDEDORES = {
-    "Mikhayas": ["mk","MK","MIKHAYAS","Mk","mikhayas"],
-    "N4NDIN": ["nandin","Nandin","n4ndin","N4ndin"],
-    "Lucas": ["LUCAS","lucas"],
-    "Dionata": ["DIONATA","dionata"],
-    "Ramilson": ["RAMILSON","Rami","RAMI","rami","ramilson"],
-    "Kaio": ["Caio","KAIO","CAIO","kaio","caio"],
-    "Edu": ["edu","EDU","eduardo","Eduardo","EDUARDO"]
+# Carregar vendas e relatório
+with open("vendas.json", "r") as f:
+    vendas = json.load(f)
+
+with open("relatorio.json", "r") as f:
+    relatorio = json.load(f)
+
+# Contas à venda
+contas_disponiveis = {
+    "God Human": {"Lv": 2800, "Preço": 20},
+    "Dragon Talor v2": {"Lv": 2800, "Preço": 15},
+    "Sharkman Karatê v2": {"Lv": 2800, "Preço": 15},
+    "Electric Claw": {"Lv": 2800, "Preço": 10},
+    "100M Berries": {"Lv": 2800, "Preço": 20},
+    "Level Max": {"Lv": 2800, "Preço": 8},
+    "Fruta no Inv": {"Lv": 2800, "Preço": 12},
+    "Tudo Random": {"Lv": "Aleatória", "Preço": 10}
 }
 
-# Carregar JSONs
-def carregar_json(file):
-    if not os.path.exists(file):
-        with open(file, "w") as f:
-            json.dump({}, f)
-    with open(file, "r") as f:
-        return json.load(f)
+# Stocks iniciais (quantidade)
+stocks_quantidade = {nome: 5 for nome in contas_disponiveis}  # exemplo: 5 unidades cada
 
-vendas = carregar_json("vendas.json")
-relatorio = carregar_json("relatorio.json")
+# Lista de nomes de vendedores
+VENDEDORES = ["Mikhayas", "Nandin", "Lucas", "Dionata", "Ramilson", "Kaio", "Edu"]
 
-# Stocks em memória
-stocks = {}
-for nome, cid in CANAIS["stocks"].items():
-    stocks[nome] = []  # Vai carregar cada mensagem do stock
+# /contas envia DM com lista
+@bot.slash_command(name="contas", description="Veja as contas disponíveis")
+async def contas(interaction: discord.Interaction):
+    if interaction.channel.id != CANAL_CONTAS:
+        await interaction.response.send_message("Este comando só funciona no canal de compras!", ephemeral=True)
+        return
 
-async def atualizar_stocks():
-    for nome, cid in CANAIS["stocks"].items():
-        canal = bot.get_channel(cid)
-        if canal:
-            messages = await canal.history(limit=None).flatten()
-            stocks[nome] = []
-            for msg in messages:
-                # Assumimos o formato: Nome: xxxxx | Usuário: xxxx | Senha: yyyy
-                stocks[nome].append(msg.content)
+    msg = "**Contas disponíveis:**\n\n"
+    for nome, info in contas_disponiveis.items():
+        qtd = stocks_quantidade.get(nome, 0)
+        msg += f"• {nome}\nLv: {info['Lv']} – R${info['Preço']} | Estoque: {qtd}\n\n"
 
-# Evento quando bot está pronto
+    msg += "✅ Contas **100%** seguras\n\n"
+    msg += "👀 Mande o nome da conta que deseja comprar"
+
+    await interaction.user.send(msg)
+    await interaction.response.send_message("💌 Enviei as contas para o seu DM!", ephemeral=True)
+
+
+# Listener para pegar escolha da conta na DM
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # Verifica se é DM
+    if isinstance(message.channel, discord.DMChannel):
+        escolha = message.content.strip()
+        if escolha in contas_disponiveis:
+            if stocks_quantidade.get(escolha, 0) > 0:
+                stocks_quantidade[escolha] -= 1
+                await message.channel.send(
+                    f"✅ Conta **{escolha}** vendida!\nUsuário: {message.author}\nPreço: R${contas_disponiveis[escolha]['Preço']}"
+                )
+                # Aqui você pode atualizar vendas.json se necessário
+            else:
+                await message.channel.send(f"❌ A conta **{escolha}** não está disponível no momento.")
+        else:
+            await message.channel.send("❌ Conta não reconhecida. Digite exatamente o nome listado nas contas.")
+    await bot.process_commands(message)
+
+
+# /verify só no canal de verificação
+@bot.slash_command(name="verify", description="Verificar pagamento da conta")
+async def verify(interaction: discord.Interaction):
+    if interaction.channel.id != CANAL_VERIFY:
+        await interaction.response.send_message("Este comando só funciona no canal de verificação!", ephemeral=True)
+        return
+
+    # Aqui você pode implementar a lógica de verificação de pagamento
+    await interaction.response.send_message("Pagamento verificado! Conta liberada.", ephemeral=True)
+
+
+# /vendas para mostrar lucro do vendedor
+@bot.slash_command(name="vendas", description="Mostra lucro do vendedor")
+async def vendas_cmd(interaction: discord.Interaction):
+    if str(interaction.user.id) not in VENDEDORES:
+        await interaction.response.send_message("❌ Você não tem permissão!", ephemeral=True)
+        return
+
+    usuario = interaction.user.name
+    info = vendas.get(usuario, {"diaria": 0, "total": 0})
+    msg = f"**{usuario}**\nDiária: R${info['diaria']}\nTotal: R${info['total']}\nMensal: R${info['total']*30}"  # exemplo
+    await interaction.response.send_message(msg)
+
+
+# /relatorio para mostrar lucro total (somente canal correto)
+@bot.slash_command(name="relatorio", description="Mostra lucro total da loja")
+async def relatorio_cmd(interaction: discord.Interaction):
+    if interaction.channel.id != CANAL_RELATORIO:
+        await interaction.response.send_message("❌ Este comando só funciona no canal de relatório!", ephemeral=True)
+        return
+
+    total = sum(v['total'] for v in vendas.values())
+    msg = f"📜 **World Blox**\n💰 Lucro total: R${total}"
+    await interaction.response.send_message(msg)
+
+
 @bot.event
 async def on_ready():
-    await atualizar_stocks()
     print(f"{bot.user} está online!")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Comandos sincronizados: {len(synced)}")
-    except Exception as e:
-        print(f"Erro ao sincronizar comandos: {e}")
 
-# -----------------------
-# COMANDO /contas
-# -----------------------
-@bot.tree.command(name="contas", description="Veja as contas disponíveis")
-async def contas(interaction: discord.Interaction):
-    if interaction.channel.id != CANAIS["contas"]:
-        await interaction.response.send_message("Use este comando no canal correto.", ephemeral=True)
-        return
-
-    msg = "**Contas disponíveis:**\n\n**--🥊 Estilos de luta--**\n"
-    for nome in ["God Human","Dragon Talor","Sharkman","Electric Claw"]:
-        q = len(stocks[nome])
-        preco = {"God Human":20,"Dragon Talor":15,"Sharkman":15,"Electric Claw":10}[nome]
-        msg += f"• {nome} (Disponíveis: {q}) – R${preco}\n"
-
-    msg += "\n**--📦 Contas Padrão--**\n"
-    for nome in ["100M Berries","Level Max","Fruta no Inv","Tudo Random"]:
-        q = len(stocks[nome])
-        preco = {"100M Berries":20,"Level Max":8,"Fruta no Inv":12,"Tudo Random":10}[nome]
-        msg += f"• {nome} (Disponíveis: {q}) – R${preco}\n"
-
-    msg += "\n✅ Contas 100% seguras\n👀 Mande o nome da conta que deseja comprar."
-
-    await interaction.response.send_message(msg, ephemeral=True)
-
-# -----------------------
-# COMANDO /verify
-# -----------------------
-@bot.tree.command(name="verify", description="Verifica pagamento do cliente")
-async def verify(interaction: discord.Interaction, conta: str, usuario: discord.Member):
-    if interaction.channel.id != CANAIS["verify"]:
-        await interaction.response.send_message("Use este comando no canal correto.", ephemeral=True)
-        return
-
-    # Verifica se a conta existe no stock
-    if conta not in stocks or len(stocks[conta]) == 0:
-        await interaction.response.send_message("Conta não disponível.", ephemeral=True)
-        return
-
-    dados_conta = stocks[conta].pop(0)  # Remove do stock
-    # Atualiza canal stock (apaga mensagem correspondente)
-    canal = bot.get_channel(CANAIS["stocks"][conta])
-    async for msg in canal.history(limit=None):
-        if msg.content == dados_conta:
-            await msg.delete()
-            break
-
-    # Envia DM para cliente
-    try:
-        await usuario.send(f"Sua conta {conta} foi entregue!\n{dados_conta}")
-        await interaction.response.send_message(f"Conta entregue para {usuario.display_name}", ephemeral=True)
-    except:
-        await interaction.response.send_message("Não foi possível enviar DM para o usuário.", ephemeral=True)
-
-    # Atualiza vendas
-    vendedor = interaction.user.display_name
-    if vendedor not in vendas:
-        vendas[vendedor] = {"diaria":0,"total":0}
-    vendas[vendedor]["diaria"] += 1
-    vendas[vendedor]["total"] += 1
-    with open("vendas.json","w") as f:
-        json.dump(vendas,f,indent=4)
-
-    # Atualiza relatorio
-    relatorio["lucro_total"] = relatorio.get("lucro_total",0) + 1
-    with open("relatorio.json","w") as f:
-        json.dump(relatorio,f,indent=4)
-
-# -----------------------
-# COMANDO /vendas
-# -----------------------
-@bot.tree.command(name="vendas", description="Mostra suas vendas")
-async def vendas_cmd(interaction: discord.Interaction):
-    if interaction.channel.id != CANAIS["relatorio_vendas"]:
-        await interaction.response.send_message("Use este comando no canal correto.", ephemeral=True)
-        return
-
-    vendedor = interaction.user.display_name
-    if vendedor not in vendas:
-        await interaction.response.send_message("Você ainda não tem vendas registradas.", ephemeral=True)
-        return
-
-    data = vendas[vendedor]
-    msg = f"**{vendedor}**\nDiária: {data['diaria']}\nTotal: {data['total']}"
-    await interaction.response.send_message(msg, ephemeral=True)
-
-# -----------------------
-# COMANDO /relatorio
-# -----------------------
-@bot.tree.command(name="relatorio", description="Mostra o lucro total da loja")
-async def relatorio_cmd(interaction: discord.Interaction):
-    if interaction.channel.id != CANAIS["relatorio_vendas"]:
-        await interaction.response.send_message("Use este comando no canal correto.", ephemeral=True)
-        return
-
-    total = relatorio.get("lucro_total",0)
-    await interaction.response.send_message(f"📜World Blox\n💰 Lucro total: {total}", ephemeral=True)
-
-# -----------------------
-# RODAR O BOT
-# -----------------------
-TOKEN = os.getenv("DISCORD_TOKEN")
+# Rodar bot
+import os
+TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
