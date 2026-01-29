@@ -1,152 +1,171 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
+from discord import app_commands
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# ---------- CONFIGURAÇÕES ----------
-TOKEN = "SEU_TOKEN_AQUI"
-
-CANAL_COMPRAS = "comprar-contas"
-CANAL_RELATORIO = "relatorio-vendas"
-CANAL_VERIFY = "verificar-pagamentos"
+# ==========================
+# CONFIGURAÇÕES
+# ==========================
+TOKEN = "SEU_TOKEN_AQUI"  # Substitua pelo seu token real
+GUILD_ID = 123456789012345678  # Substitua pelo ID do seu servidor
+RELATORIO_CHANNEL = "📊┃relatorio-vendas"
+COMPRAR_CHANNEL = "📦┃comprar-contas"
+VERIFY_CHANNEL = "✅┃verificar-pagamentos"
 
 CARGOS_AUTORIZADOS = ["Staff", "Mod", "Infuencer", "Farmer", "Entregador"]
 
-STOCK_FILE = "stock.json"
-VENDAS_FILE = "vendas.json"
+VARIACOES_NOMES = {
+    "Mikhayas": ["Mikhayas", "mk", "MK", "MIKHAYAS", "Mk", "mikhayas"],
+    "N4NDIN": ["N4NDIN", "nandin", "Nandin", "n4ndin", "N4ndin"],
+    "Lucas": ["Lucas", "LUCAS", "lucas"],
+    "Dionata": ["Dionata", "DIONATA", "dionata"],
+    "Ramilson": ["Ramilson","RAMILSON","Rami","RAMI","rami","ramilson"],
+    "Kaio": ["Kaio","Caio","KAIO","CAIO","kaio","caio"],
+    "Edu": ["Edu","edu","EDU","eduardo","Eduardo","EDUARDO"]
+}
 
+# ==========================
+# BOT SETUP
+# ==========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
+tree = bot.tree
 
-# ---------- FUNÇÕES DE SUPORTE ----------
-def carregar_json(nome_arquivo):
-    with open(nome_arquivo, "r", encoding="utf-8") as f:
+# ==========================
+# FUNÇÕES AUXILIARES
+# ==========================
+def carregar_json(file):
+    with open(file, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def salvar_json(nome_arquivo, data):
-    with open(nome_arquivo, "w", encoding="utf-8") as f:
+def salvar_json(file, data):
+    with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 def usuario_autorizado(member):
-    return any(cargo.name in CARGOS_AUTORIZADOS for cargo in member.roles)
+    return any(role.name in CARGOS_AUTORIZADOS for role in member.roles)
 
-# ---------- COMANDOS ----------
-@bot.command()
-async def contas(ctx):
-    if ctx.channel.name != CANAL_COMPRAS:
-        return
-    user = ctx.author
-    stock = carregar_json(STOCK_FILE)
-    mensagem = "**📦 Contas disponíveis:**\n\n"
-    for nome, dados in stock.items():
-        if dados["comprador"] is None:
-            mensagem += f"{dados['detalhes']}\n\n👀 Mande o nome da conta que deseja comprar\n\n"
-    try:
-        await user.send(mensagem)
-        await ctx.send(f"✅ {user.mention}, verifique suas DMs para ver as contas disponíveis.")
-    except discord.Forbidden:
-        await ctx.send(f"❌ {user.mention}, não consegui enviar DM. Ative suas mensagens privadas.")
+def encontrar_nome_variacao(nome_digitado):
+    for principal, variacoes in VARIACOES_NOMES.items():
+        if nome_digitado.lower() in [v.lower() for v in variacoes]:
+            return principal
+    return None
 
-@bot.command()
-async def vendas(ctx):
-    if not usuario_autorizado(ctx.author):
-        return await ctx.send("❌ Você não tem permissão para usar esse comando.")
-    vendas = carregar_json(VENDAS_FILE)
-    nome = ctx.author.name
-    if nome not in vendas:
-        return await ctx.send("❌ Seu nome não está registrado.")
-    diaria = vendas[nome]["diaria"]
-    total = vendas[nome]["total"]
-    # Média semanal simples: total / 4
-    media = round(total / 4, 2)
-    await ctx.send(
-        f"**{nome}**\nDiária: R${diaria}\nMédia Semanal: R${media}\nMensal: R${total}"
-    )
+def procurar_conta_stock(nome_digitado):
+    stock = carregar_json("vendas.json")
+    for conta, info in stock.items():
+        if nome_digitado.lower() in conta.lower():
+            return conta, info
+    return None, None
 
-@bot.command()
-async def relatorio(ctx):
-    if ctx.channel.name != CANAL_RELATORIO:
-        return
-    if not usuario_autorizado(ctx.author):
-        return await ctx.send("❌ Você não tem permissão para usar esse comando.")
-    vendas = carregar_json(VENDAS_FILE)
-    total_geral = sum(dados["total"] for dados in vendas.values())
-    await ctx.send(f"📜 **World Blox**\n💰 Lucro total: R${total_geral}")
-
-@bot.command()
-async def verify(ctx, nome_conta):
-    if ctx.channel.name != CANAL_VERIFY:
-        return
-    if not usuario_autorizado(ctx.author):
-        return await ctx.send("❌ Você não tem permissão para usar esse comando.")
-    stock = carregar_json(STOCK_FILE)
-    vendas = carregar_json(VENDAS_FILE)
-
-    if nome_conta not in stock or stock[nome_conta]["comprador"] is None:
-        return await ctx.send("🚫 Conta não disponível ou não foi selecionada pelo comprador.")
-
-    comprador = stock[nome_conta]["comprador"]
-    valor = stock[nome_conta]["valor"]
-    upador = stock[nome_conta]["upador"]
-
-    # Atualizar ganhos
-    vendedor_nome = ctx.author.name
-    if vendedor_nome != upador:
-        vendedor_valor = round(valor * 0.2, 2)
-        upador_valor = round(valor * 0.8, 2)
-        if vendedor_nome in vendas:
-            vendas[vendedor_nome]["diaria"] += vendedor_valor
-            vendas[vendedor_nome]["total"] += vendedor_valor
-        if upador in vendas:
-            vendas[upador]["diaria"] += upador_valor
-            vendas[upador]["total"] += upador_valor
-    else:
-        if vendedor_nome in vendas:
-            vendas[vendedor_nome]["diaria"] += valor
-            vendas[vendedor_nome]["total"] += valor
-
-    # Mandar conta pro comprador
-    user = ctx.guild.get_member_named(comprador)
-    if user:
-        await user.send(
-            f"✅ Pix caiu, boa compra.\n**📦 Sua conta está saindo para a entrega.**\n⏳ Prazo de até 2 Dias.\n\nConta: {stock[nome_conta]['detalhes']}\n\n🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.\n\n(Contas)"
-        )
-
-    # Remover stock
-    stock[nome_conta]["comprador"] = None
-    stock[nome_conta]["upador"] = None
-
-    salvar_json(STOCK_FILE, stock)
-    salvar_json(VENDAS_FILE, vendas)
-    await ctx.send(f"✅ Conta **{nome_conta}** entregue com sucesso a {comprador}.")
-
-# ---------- TAREFAS AUTOMÁTICAS ----------
-# Reset diário das vendas
-@tasks.loop(hours=24)
-async def reset_diario():
-    vendas = carregar_json(VENDAS_FILE)
-    for dados in vendas.values():
-        dados["diaria"] = 0
-    salvar_json(VENDAS_FILE, vendas)
-
-# Reset mensal
-@tasks.loop(hours=24)
-async def reset_mensal():
-    hoje = datetime.now()
-    if hoje.day == 28:
-        vendas = carregar_json(VENDAS_FILE)
-        for dados in vendas.values():
-            dados["total"] = 0
-        salvar_json(VENDAS_FILE, vendas)
-
-# ---------- EVENTOS ----------
+# ==========================
+# EVENTO DE INÍCIO
+# ==========================
 @bot.event
 async def on_ready():
     print(f"{bot.user} está online!")
-    reset_diario.start()
-    reset_mensal.start()
+    try:
+        await tree.sync(guild=discord.Object(id=GUILD_ID))
+        print("Comandos sincronizados com sucesso!")
+    except Exception as e:
+        print(f"Erro ao sincronizar comandos: {e}")
 
+# ==========================
+# COMANDOS
+# ==========================
+
+# /contas - envia contas em DM
+@tree.command(name="contas", description="Veja as contas disponíveis", guild=discord.Object(id=GUILD_ID))
+async def contas(interaction: discord.Interaction):
+    if interaction.channel.name != COMPRAR_CHANNEL:
+        await interaction.response.send_message(f"Use este comando no canal correto: {COMPRAR_CHANNEL}", ephemeral=True)
+        return
+
+    stock = carregar_json("vendas.json")
+    mensagem = "**Contas à venda:**\n\n"
+    for nome, info in stock.items():
+        emojis = info.get("emoji", "")
+        preco = info.get("preco", "Indefinido")
+        nivel = info.get("nivel", "Indefinido")
+        mensagem += f"• {nome} {emojis}\nLv {nivel} – R${preco}\n\n"
+
+    mensagem += "✅ Contas **100%** seguras\n\n👀 Mande o nome da conta que deseja comprar"
+    await interaction.user.send(mensagem)
+    await interaction.response.send_message("📩 Confira sua DM com as contas disponíveis!", ephemeral=True)
+
+# /vendas - lucro individual
+@tree.command(name="vendas", description="Veja seu lucro diário, médio e mensal", guild=discord.Object(id=GUILD_ID))
+async def vendas(interaction: discord.Interaction):
+    if not usuario_autorizado(interaction.user):
+        await interaction.response.send_message("Você não tem permissão para usar este comando.", ephemeral=True)
+        return
+
+    data = carregar_json("relatorio.json")
+    nome = encontrar_nome_variacao(interaction.user.name)
+    if not nome:
+        await interaction.response.send_message("Seu usuário não foi encontrado no sistema.", ephemeral=True)
+        return
+
+    info = data.get(nome, {"diaria":0,"media":0,"mensal":0})
+    mensagem = f"**{nome}**\nDiária: R${info['diaria']}\nMédia: R${info['media']}\nMensal: R${info['mensal']}"
+    await interaction.response.send_message(mensagem, ephemeral=True)
+
+# /relatorio - lucro total da loja
+@tree.command(name="relatorio", description="Lucro total da loja", guild=discord.Object(id=GUILD_ID))
+async def relatorio(interaction: discord.Interaction):
+    if not usuario_autorizado(interaction.user):
+        await interaction.response.send_message("Você não tem permissão para usar este comando.", ephemeral=True)
+        return
+
+    data = carregar_json("relatorio.json")
+    total = sum(v.get("mensal",0) for v in data.values())
+    mensagem = f"📜 **World Blox**\n💰 Lucro total: R${total}"
+    canal = discord.utils.get(interaction.guild.channels, name=RELATORIO_CHANNEL)
+    if canal:
+        await canal.send(mensagem)
+    await interaction.response.send_message("Relatório enviado no canal de vendas.", ephemeral=True)
+
+# /verify - confirmar pagamento
+@tree.command(name="verify", description="Confirmar pagamento de uma conta", guild=discord.Object(id=GUILD_ID))
+async def verify(interaction: discord.Interaction, usuario: discord.Member, conta: str):
+    if interaction.channel.name != VERIFY_CHANNEL:
+        await interaction.response.send_message(f"Use este comando apenas no canal {VERIFY_CHANNEL}.", ephemeral=True)
+        return
+    if not usuario_autorizado(interaction.user):
+        await interaction.response.send_message("Você não tem permissão para usar este comando.", ephemeral=True)
+        return
+
+    nome_conta, info = procurar_conta_stock(conta)
+    if not nome_conta:
+        await interaction.response.send_message("Conta não encontrada ou indisponível.", ephemeral=True)
+        return
+
+    # Remove do stock
+    stock = carregar_json("vendas.json")
+    if nome_conta in stock:
+        del stock[nome_conta]
+        salvar_json("vendas.json", stock)
+
+    # Atualiza relatorio
+    relatorio_data = carregar_json("relatorio.json")
+    vendedor_nome = encontrar_nome_variacao(interaction.user.name)
+    if vendedor_nome:
+        if vendedor_nome not in relatorio_data:
+            relatorio_data[vendedor_nome] = {"diaria":0,"media":0,"mensal":0}
+        relatorio_data[vendedor_nome]["diaria"] += info.get("preco",0)
+        relatorio_data[vendedor_nome]["mensal"] += info.get("preco",0)
+        salvar_json("relatorio.json", relatorio_data)
+
+    # Envia conta para o cliente
+    await usuario.send(f"✅ Pix caiu boa compra.\n**📦 Sua conta está saindo para a entrega:**\n\nUsuário: {nome_conta}\nSenha: {info.get('senha','---')}\n\n🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.\n\n(Contas) 🚨 Botão de compra se expira")
+
+    await interaction.response.send_message(f"Conta {nome_conta} entregue para {usuario.name}.", ephemeral=True)
+
+# ==========================
+# INICIAR BOT
+# ==========================
 bot.run(TOKEN)
