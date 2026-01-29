@@ -2,180 +2,187 @@ import discord
 from discord.ext import commands, tasks
 import json
 import datetime
+import asyncio
+
+intents = discord.Intents.default()
+intents.members = True
+bot = commands.Bot(command_prefix='/', intents=intents)
 
 # CONFIGURAÇÕES
 TOKEN = "SEU_TOKEN_DO_DISCORD"
-PREFIX = "/"
-GUILD_ID = 123456789012345678  # ID do seu servidor
-CHAT_VERIFICACAO = 987654321098765432  # ID do chat privado de verificação
-CHAT_RELATORIO = 876543210987654321  # ID do chat privado de relatório
-CARGOS_PERMITIDOS = ["Staff", "Mod", "Influencer", "Farmer", "Entregador"]
+CHAT_CONTAS_ID = 123456789012345678  # canal público de /contas
+CHAT_RELATORIO_ID = 987654321098765432  # chat privado de relatório de compras
+CHAT_VERIFY_ID = 112233445566778899  # chat privado de verificação
 
-bot = commands.Bot(command_prefix=PREFIX, intents=discord.Intents.all())
+CARGOS_ACESSO = ["Staff", "Mod", "Infuencer", "Farmer", "Entregador"]
 
-# ARQUIVOS
 STOCK_FILE = "vendas.json"
 RELATORIO_FILE = "relatorio.json"
 
 # CARREGAR STOCK
-try:
-    with open(STOCK_FILE, "r") as f:
-        stock = json.load(f)
-except:
-    stock = []
+def carregar_stock():
+    try:
+        with open(STOCK_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-# CARREGAR RELATÓRIO
-try:
-    with open(RELATORIO_FILE, "r") as f:
-        relatorio = json.load(f)
-except:
-    relatorio = {}
-
-def save_stock():
+# SALVAR STOCK
+def salvar_stock(stock):
     with open(STOCK_FILE, "w") as f:
         json.dump(stock, f, indent=4)
 
-def save_relatorio():
+# CARREGAR RELATORIO
+def carregar_relatorio():
+    try:
+        with open(RELATORIO_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+# SALVAR RELATORIO
+def salvar_relatorio(data):
     with open(RELATORIO_FILE, "w") as f:
-        json.dump(relatorio, f, indent=4)
+        json.dump(data, f, indent=4)
 
-def tem_cargo(user):
-    return any(role.name in CARGOS_PERMITIDOS for role in user.roles)
+# CHECAR SE TEM CARGO
+def tem_cargo(member):
+    return any(role.name in CARGOS_ACESSO for role in member.roles)
 
-def atualizar_relatorio(usuario, valor):
-    hoje = datetime.datetime.now().strftime("%Y-%m-%d")
-    mes = datetime.datetime.now().strftime("%Y-%m")
-    if usuario not in relatorio:
-        relatorio[usuario] = {"diaria":0, "total":0, "semanal":0, "ultima_data":hoje, "ultimo_mes":mes}
-    # reset diário
-    if relatorio[usuario]["ultima_data"] != hoje:
-        relatorio[usuario]["diaria"] = 0
-        relatorio[usuario]["ultima_data"] = hoje
-    # reset mensal
-    if relatorio[usuario]["ultimo_mes"] != mes:
-        relatorio[usuario]["total"] = 0
-        relatorio[usuario]["semanal"] = 0
-        relatorio[usuario]["ultimo_mes"] = mes
-
-    relatorio[usuario]["diaria"] += valor
-    relatorio[usuario]["total"] += valor
-    relatorio[usuario]["semanal"] += valor
-
-    save_relatorio()
-
-# COMANDO /contas
+# /contas
 @bot.command()
 async def contas(ctx):
-    dm = ctx.author
-    if not stock:
-        await dm.send("🚫 Não há contas disponíveis no momento.")
+    if ctx.channel.id != CHAT_CONTAS_ID:
         return
-    msg = "🏪 **World Blox — Contas Blox Fruits**\n\n"
-    for conta in stock:
-        msg += f"**{conta['nome']}** — R$ {conta['preco']}\n"
-    msg += "\n👀 Mande o nome da conta que deseja comprar"
-    await dm.send(msg)
-    await ctx.message.delete()
+    user = ctx.author
+    stock = carregar_stock()
+    if not stock:
+        await user.send("🚫 Nenhuma conta disponível no momento.")
+        return
+    msg = "📦 Contas disponíveis:\n"
+    for nome in stock.keys():
+        msg += f"- {nome}\n"
+    msg += "\n👀 Mande o nome da conta que deseja comprar."
+    await user.send(msg)
 
-# CLIENTE RESPONDE COM NOME DA CONTA
+# ESCUTAR DM COM O NOME DA CONTA
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
-    # só DM
+    # DM
     if isinstance(message.channel, discord.DMChannel):
-        escolha = message.content.strip()
-        conta_encontrada = None
-        for c in stock:
-            if escolha.lower() in c['nome'].lower():
-                conta_encontrada = c
-                break
-        if not conta_encontrada:
+        stock = carregar_stock()
+        nome_conta = message.content.strip()
+        if nome_conta not in stock:
             await message.channel.send("🚫 Conta fora de Stock\n⏳ Aguarde ficar disponível")
             return
-        # envia PIX e notificação no chat de verificação
-        await message.channel.send(f"✅ Conta disponível será enviada pós o pagamento.\n💸 Chave Pix: world.blox018@gmail.com")
-        canal = bot.get_channel(CHAT_VERIFICACAO)
-        await canal.send(f"📦 Nova compra pendente:\nConta: {conta_encontrada['nome']}\nValor: R$ {conta_encontrada['preco']}\nComprador: {message.author.name}")
-        # registra a compra pendente para /verify
-        if "pendentes" not in relatorio:
-            relatorio["pendentes"] = []
-        relatorio["pendentes"].append({
-            "usuario": message.author.name,
-            "conta": conta_encontrada["nome"],
-            "preco": conta_encontrada["preco"],
-            "upador": message.author.name  # pode ajustar caso queira outro upador
-        })
-        save_relatorio()
+
+        info = stock[nome_conta]
+        valor = info.get("valor", "R$0")
+        await message.channel.send(
+            "✅ Conta disponível será enviada pós o pagamento.\n\n💸 Chave Pix: world.blox018@gmail.com"
+        )
+
+        # AVISO NO CHAT DE VERIFICACAO
+        canal_verify = bot.get_channel(CHAT_VERIFY_ID)
+        aviso_msg = await canal_verify.send(
+            f"💰 Conta: {nome_conta}\n"
+            f"💵 Valor: {valor}\n"
+            f"👤 Comprador: {message.author.mention}\n"
+            f"⌛ Aguarde confirmação com `/verify {nome_conta}`"
+        )
+
     await bot.process_commands(message)
 
-# COMANDO /verify
+# /verify
 @bot.command()
-async def verify(ctx, usuario: str = None):
+async def verify(ctx, nome_conta: str):
+    if ctx.channel.id != CHAT_VERIFY_ID:
+        return
     if not tem_cargo(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
+        await ctx.send("🚫 Você não tem permissão para usar este comando.")
         return
-    # verifica pendentes
-    if "pendentes" not in relatorio or not relatorio["pendentes"]:
-        await ctx.send("❌ Não há compras pendentes.")
+    stock = carregar_stock()
+    if nome_conta not in stock:
+        await ctx.send("🚫 Conta não encontrada no stock.")
         return
-    pendente = None
-    for p in relatorio["pendentes"]:
-        if usuario is None or p["usuario"].lower() == usuario.lower():
-            pendente = p
-            break
-    if not pendente:
-        await ctx.send("❌ Não foi encontrada compra pendente desse usuário.")
-        return
-    # calcula lucro
-    vendedor = ctx.author.name
-    upador = pendente["upador"]
-    preco = pendente["preco"]
-    if vendedor == upador:
-        lucro_upador = preco
-        lucro_vendedor = 0
-    else:
-        lucro_upador = preco*0.8
-        lucro_vendedor = preco*0.2
-    atualizar_relatorio(upador, lucro_upador)
-    if lucro_vendedor > 0:
-        atualizar_relatorio(vendedor, lucro_vendedor)
-    # envia conta
-    canal_user = None
-    for u in bot.users:
-        if u.name == pendente["usuario"]:
-            canal_user = u
-            break
-    if canal_user:
-        await canal_user.send(f"✅ Pix caiu boa compra.\n📦 Sua conta está saindo para a entrega.\n⏳ Prazo de até 2 Dias.\n🚨 Caso possua verificação de 2 etapas, informe Staff/Farmer/Entregador.\n\nUsuário: {pendente['usuario']}\nSenha: {pendente['conta']}\n\n(Contas)\n👀 Mande o nome da conta que deseja comprar")
-    # remove do stock
-    stock[:] = [c for c in stock if c["nome"] != pendente["conta"]]
-    save_stock()
-    # remove pendente
-    relatorio["pendentes"].remove(pendente)
-    save_relatorio()
-    await ctx.send(f"✅ Compra de {pendente['usuario']} confirmada e conta entregue.")
+    info = stock.pop(nome_conta)
+    salvar_stock(stock)
+    conta_info = info.get("dados", "Sem dados")
+    await ctx.send(
+        f"✅ Pix caiu, boa compra!\n**📦 Sua conta está saindo para a entrega.**\n⏳ Prazo de até 2 Dias.\n\n"
+        f"🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.\n\n"
+        f"Conta:\n{conta_info}\n\n(Contas)\n🚨 Botão de compra se expira🚨"
+    )
 
-# COMANDO /vendas
+    # ATUALIZA RELATORIO
+    relatorio = carregar_relatorio()
+    vendedor = info.get("vendedor", "Desconhecido")
+    if vendedor not in relatorio:
+        relatorio[vendedor] = {"diaria": 0, "total": 0, "compras": 0}
+    relatorio[vendedor]["diaria"] += info.get("lucro", 0)
+    relatorio[vendedor]["total"] += info.get("lucro", 0)
+    relatorio[vendedor]["compras"] += 1
+    salvar_relatorio(relatorio)
+
+# /vendas - lucro individual
 @bot.command()
 async def vendas(ctx):
     if not tem_cargo(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
+        await ctx.send("🚫 Você não tem permissão para usar este comando.")
         return
-    usuario = ctx.author.name
-    if usuario not in relatorio:
-        await ctx.send("❌ Nenhum registro encontrado.")
+    relatorio = carregar_relatorio()
+    usuario = str(ctx.author)
+    dados = relatorio.get(usuario)
+    if not dados:
+        await ctx.send("🚫 Nenhuma venda registrada para você.")
         return
-    data = relatorio[usuario]
-    await ctx.send(f"**{usuario}**\nDiária: R$ {data['diaria']}\nTotal: R$ {data['total']}\nMédia semanal: R$ {data['semanal']}")
+    media = dados["total"] / max(dados["compras"],1)
+    msg = (
+        f"**{usuario}**\n"
+        f"Diária: R${dados['diaria']}\n"
+        f"Média: R${media:.2f}\n"
+        f"Mensal: R${dados['total']}\n"
+    )
+    await ctx.send(msg)
 
-# COMANDO /relatorio
+# /relatorio - lucro total loja
 @bot.command()
 async def relatorio(ctx):
-    if not tem_cargo(ctx.author):
-        await ctx.send("❌ Você não tem permissão para usar este comando.")
+    if ctx.channel.id != CHAT_RELATORIO_ID:
         return
-    total_geral = sum(d["total"] for k,d in relatorio.items() if k != "pendentes")
-    await ctx.send(f"📊 Relatório geral da loja:\nTotal de vendas acumuladas: R$ {total_geral}")
+    if not tem_cargo(ctx.author):
+        await ctx.send("🚫 Você não tem permissão para usar este comando.")
+        return
+    relatorio = carregar_relatorio()
+    lucro_total = sum(d["total"] for d in relatorio.values())
+    msg = f"📜 World Blox\n💰 Lucro total: R${lucro_total}"
+    await ctx.send(msg)
+
+# RESET DIARIO
+@tasks.loop(hours=24)
+async def reset_diario():
+    relatorio = carregar_relatorio()
+    for v in relatorio.values():
+        v["diaria"] = 0
+    salvar_relatorio(relatorio)
+
+# RESET MENSAL
+@tasks.loop(hours=24)
+async def reset_mensal():
+    hoje = datetime.datetime.now()
+    if hoje.day == 28:
+        relatorio = carregar_relatorio()
+        for v in relatorio.values():
+            v["total"] = 0
+            v["compras"] = 0
+        salvar_relatorio(relatorio)
+
+@bot.event
+async def on_ready():
+    print(f"{bot.user} está online!")
+    reset_diario.start()
+    reset_mensal.start()
 
 bot.run(TOKEN)
