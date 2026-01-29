@@ -1,26 +1,28 @@
 import discord
-from discord.ext import commands, tasks
+from discord import app_commands
+from discord.ext import tasks
 import json
 import datetime
 import os
-import asyncio
 
 # ===== CONFIGURAÇÕES =====
-TOKEN = os.environ.get("TOKEN")  # Pega o token do Koyeb, variável de ambiente
+TOKEN = os.environ.get("TOKEN")  # variável de ambiente no Koyeb
 
-CHAT_CONTAS_ID = 123456789012345678  # canal público de /contas
-CHAT_RELATORIO_ID = 987654321098765432  # chat privado de relatório de compras
-CHAT_VERIFY_ID = 112233445566778899  # chat privado de verificação
+# IDs dos canais (substitua pelos IDs reais)
+CHAT_CONTAS_ID = 123456789012345678
+CHAT_RELATORIO_ID = 987654321098765432
+CHAT_VERIFY_ID = 112233445566778899
 
 CARGOS_ACESSO = ["Staff", "Mod", "Infuencer", "Farmer", "Entregador"]
 
 STOCK_FILE = "vendas.json"
 RELATORIO_FILE = "relatorio.json"
 
-# ===== INTENTS E BOT =====
+# ===== BOT E INTENTS =====
 intents = discord.Intents.default()
 intents.members = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 
 # ===== FUNÇÕES AUXILIARES =====
 def carregar_stock():
@@ -51,22 +53,25 @@ def tem_cargo(member):
 # ===== COMANDOS =====
 
 # /contas → envia lista de contas disponíveis via DM
-@bot.command()
-async def contas(ctx):
-    if ctx.channel.id != CHAT_CONTAS_ID:
+@tree.command(name="contas", description="Ver as contas disponíveis")
+async def contas(interaction: discord.Interaction):
+    if interaction.channel.id != CHAT_CONTAS_ID:
+        await interaction.response.send_message("🚫 Use este comando no canal correto.", ephemeral=True)
         return
-    user = ctx.author
+    user = interaction.user
     stock = carregar_stock()
     if not stock:
-        await user.send("🚫 Nenhuma conta disponível no momento.")
+        await interaction.response.send_message("🚫 Nenhuma conta disponível no momento.", ephemeral=True)
         return
+
     msg = "📦 Contas disponíveis:\n"
     for nome in stock.keys():
         msg += f"- {nome}\n"
     msg += "\n👀 Mande o nome da conta que deseja comprar."
     await user.send(msg)
+    await interaction.response.send_message("✅ Confira suas DMs!", ephemeral=True)
 
-# DM do usuário com o nome da conta
+# Evento de DM do usuário para pegar o nome da conta
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -84,7 +89,6 @@ async def on_message(message):
             "✅ Conta disponível será enviada pós o pagamento.\n\n💸 Chave Pix: world.blox018@gmail.com"
         )
 
-        # aviso no chat de verificação
         canal_verify = bot.get_channel(CHAT_VERIFY_ID)
         await canal_verify.send(
             f"💰 Conta: {nome_conta}\n"
@@ -93,24 +97,24 @@ async def on_message(message):
             f"⌛ Aguarde confirmação com `/verify {nome_conta}`"
         )
 
-    await bot.process_commands(message)
-
 # /verify → confirmação de pagamento por cargos
-@bot.command()
-async def verify(ctx, nome_conta: str):
-    if ctx.channel.id != CHAT_VERIFY_ID:
+@tree.command(name="verify", description="Confirmar pagamento de uma conta")
+@app_commands.describe(nome_conta="Nome da conta a verificar")
+async def verify(interaction: discord.Interaction, nome_conta: str):
+    if interaction.channel.id != CHAT_VERIFY_ID:
+        await interaction.response.send_message("🚫 Este comando só pode ser usado no canal de verificação.", ephemeral=True)
         return
-    if not tem_cargo(ctx.author):
-        await ctx.send("🚫 Você não tem permissão para usar este comando.")
+    if not tem_cargo(interaction.user):
+        await interaction.response.send_message("🚫 Você não tem permissão.", ephemeral=True)
         return
     stock = carregar_stock()
     if nome_conta not in stock:
-        await ctx.send("🚫 Conta não encontrada no stock.")
+        await interaction.response.send_message("🚫 Conta não encontrada no stock.", ephemeral=True)
         return
     info = stock.pop(nome_conta)
     salvar_stock(stock)
     conta_info = info.get("dados", "Sem dados")
-    await ctx.send(
+    await interaction.response.send_message(
         f"✅ Pix caiu, boa compra!\n**📦 Sua conta está saindo para a entrega.**\n⏳ Prazo de até 2 Dias.\n\n"
         f"🚨 Caso sua conta possua verificação de 2 etapas, informe um Staff, Entregador ou Farmer.\n\n"
         f"Conta:\n{conta_info}\n\n(Contas)\n🚨 Botão de compra se expira🚨"
@@ -126,17 +130,17 @@ async def verify(ctx, nome_conta: str):
     relatorio[vendedor]["compras"] += 1
     salvar_relatorio(relatorio)
 
-# /vendas → relatório individual
-@bot.command()
-async def vendas(ctx):
-    if not tem_cargo(ctx.author):
-        await ctx.send("🚫 Você não tem permissão para usar este comando.")
+# /vendas → relatório individual (apenas para cargos)
+@tree.command(name="vendas", description="Relatório de vendas individuais")
+async def vendas(interaction: discord.Interaction):
+    if not tem_cargo(interaction.user):
+        await interaction.response.send_message("🚫 Você não tem permissão.", ephemeral=True)
         return
     relatorio = carregar_relatorio()
-    usuario = str(ctx.author)
+    usuario = str(interaction.user)
     dados = relatorio.get(usuario)
     if not dados:
-        await ctx.send("🚫 Nenhuma venda registrada para você.")
+        await interaction.response.send_message("🚫 Nenhuma venda registrada para você.", ephemeral=True)
         return
     media = dados["total"] / max(dados["compras"],1)
     msg = (
@@ -145,20 +149,21 @@ async def vendas(ctx):
         f"Média: R${media:.2f}\n"
         f"Mensal: R${dados['total']}\n"
     )
-    await ctx.send(msg)
+    await interaction.response.send_message(msg, ephemeral=True)
 
-# /relatorio → lucro total loja
-@bot.command()
-async def relatorio(ctx):
-    if ctx.channel.id != CHAT_RELATORIO_ID:
+# /relatorio → lucro total loja (apenas para cargos, canal privado)
+@tree.command(name="relatorio", description="Lucro total da loja")
+async def relatorio(interaction: discord.Interaction):
+    if interaction.channel.id != CHAT_RELATORIO_ID:
+        await interaction.response.send_message("🚫 Use este comando no canal correto.", ephemeral=True)
         return
-    if not tem_cargo(ctx.author):
-        await ctx.send("🚫 Você não tem permissão para usar este comando.")
+    if not tem_cargo(interaction.user):
+        await interaction.response.send_message("🚫 Você não tem permissão.", ephemeral=True)
         return
     relatorio = carregar_relatorio()
     lucro_total = sum(d["total"] for d in relatorio.values())
     msg = f"📜 World Blox\n💰 Lucro total: R${lucro_total}"
-    await ctx.send(msg)
+    await interaction.response.send_message(msg)
 
 # ===== RESETS =====
 @tasks.loop(hours=24)
@@ -178,12 +183,10 @@ async def reset_mensal():
             v["compras"] = 0
         salvar_relatorio(relatorio)
 
-# ===== ON READY =====
+# ===== READY =====
 @bot.event
 async def on_ready():
+    await tree.sync()
     print(f"{bot.user} está online!")
     reset_diario.start()
     reset_mensal.start()
-
-# ===== RUN =====
-bot.run(TOKEN)
