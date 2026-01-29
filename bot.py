@@ -2,14 +2,12 @@ import discord
 from discord.ext import commands, tasks
 import json
 import datetime
+import os
 import asyncio
 
-intents = discord.Intents.default()
-intents.members = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+# ===== CONFIGURAÇÕES =====
+TOKEN = os.environ.get("TOKEN")  # Pega o token do Koyeb, variável de ambiente
 
-# CONFIGURAÇÕES
-TOKEN = "SEU_TOKEN_DO_DISCORD"
 CHAT_CONTAS_ID = 123456789012345678  # canal público de /contas
 CHAT_RELATORIO_ID = 987654321098765432  # chat privado de relatório de compras
 CHAT_VERIFY_ID = 112233445566778899  # chat privado de verificação
@@ -19,7 +17,12 @@ CARGOS_ACESSO = ["Staff", "Mod", "Infuencer", "Farmer", "Entregador"]
 STOCK_FILE = "vendas.json"
 RELATORIO_FILE = "relatorio.json"
 
-# CARREGAR STOCK
+# ===== INTENTS E BOT =====
+intents = discord.Intents.default()
+intents.members = True
+bot = commands.Bot(command_prefix='/', intents=intents)
+
+# ===== FUNÇÕES AUXILIARES =====
 def carregar_stock():
     try:
         with open(STOCK_FILE, "r") as f:
@@ -27,12 +30,10 @@ def carregar_stock():
     except:
         return {}
 
-# SALVAR STOCK
 def salvar_stock(stock):
     with open(STOCK_FILE, "w") as f:
         json.dump(stock, f, indent=4)
 
-# CARREGAR RELATORIO
 def carregar_relatorio():
     try:
         with open(RELATORIO_FILE, "r") as f:
@@ -40,16 +41,16 @@ def carregar_relatorio():
     except:
         return {}
 
-# SALVAR RELATORIO
 def salvar_relatorio(data):
     with open(RELATORIO_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# CHECAR SE TEM CARGO
 def tem_cargo(member):
     return any(role.name in CARGOS_ACESSO for role in member.roles)
 
-# /contas
+# ===== COMANDOS =====
+
+# /contas → envia lista de contas disponíveis via DM
 @bot.command()
 async def contas(ctx):
     if ctx.channel.id != CHAT_CONTAS_ID:
@@ -65,12 +66,11 @@ async def contas(ctx):
     msg += "\n👀 Mande o nome da conta que deseja comprar."
     await user.send(msg)
 
-# ESCUTAR DM COM O NOME DA CONTA
+# DM do usuário com o nome da conta
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-    # DM
     if isinstance(message.channel, discord.DMChannel):
         stock = carregar_stock()
         nome_conta = message.content.strip()
@@ -84,9 +84,9 @@ async def on_message(message):
             "✅ Conta disponível será enviada pós o pagamento.\n\n💸 Chave Pix: world.blox018@gmail.com"
         )
 
-        # AVISO NO CHAT DE VERIFICACAO
+        # aviso no chat de verificação
         canal_verify = bot.get_channel(CHAT_VERIFY_ID)
-        aviso_msg = await canal_verify.send(
+        await canal_verify.send(
             f"💰 Conta: {nome_conta}\n"
             f"💵 Valor: {valor}\n"
             f"👤 Comprador: {message.author.mention}\n"
@@ -95,7 +95,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# /verify
+# /verify → confirmação de pagamento por cargos
 @bot.command()
 async def verify(ctx, nome_conta: str):
     if ctx.channel.id != CHAT_VERIFY_ID:
@@ -116,7 +116,7 @@ async def verify(ctx, nome_conta: str):
         f"Conta:\n{conta_info}\n\n(Contas)\n🚨 Botão de compra se expira🚨"
     )
 
-    # ATUALIZA RELATORIO
+    # Atualiza relatório
     relatorio = carregar_relatorio()
     vendedor = info.get("vendedor", "Desconhecido")
     if vendedor not in relatorio:
@@ -126,7 +126,7 @@ async def verify(ctx, nome_conta: str):
     relatorio[vendedor]["compras"] += 1
     salvar_relatorio(relatorio)
 
-# /vendas - lucro individual
+# /vendas → relatório individual
 @bot.command()
 async def vendas(ctx):
     if not tem_cargo(ctx.author):
@@ -147,7 +147,7 @@ async def vendas(ctx):
     )
     await ctx.send(msg)
 
-# /relatorio - lucro total loja
+# /relatorio → lucro total loja
 @bot.command()
 async def relatorio(ctx):
     if ctx.channel.id != CHAT_RELATORIO_ID:
@@ -160,7 +160,7 @@ async def relatorio(ctx):
     msg = f"📜 World Blox\n💰 Lucro total: R${lucro_total}"
     await ctx.send(msg)
 
-# RESET DIARIO
+# ===== RESETS =====
 @tasks.loop(hours=24)
 async def reset_diario():
     relatorio = carregar_relatorio()
@@ -168,7 +168,6 @@ async def reset_diario():
         v["diaria"] = 0
     salvar_relatorio(relatorio)
 
-# RESET MENSAL
 @tasks.loop(hours=24)
 async def reset_mensal():
     hoje = datetime.datetime.now()
@@ -179,10 +178,12 @@ async def reset_mensal():
             v["compras"] = 0
         salvar_relatorio(relatorio)
 
+# ===== ON READY =====
 @bot.event
 async def on_ready():
     print(f"{bot.user} está online!")
     reset_diario.start()
     reset_mensal.start()
 
+# ===== RUN =====
 bot.run(TOKEN)
