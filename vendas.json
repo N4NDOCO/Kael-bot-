@@ -1,37 +1,9 @@
 {
-  "Mikhayas": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Nandin": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Lucas": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Dionata": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Ramilson": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Kaio": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  },
-  "Eduardo": {
-    "diaria": 0,
-    "total": 0,
-    "media": 0
-  }
+  "Mikhayas": {"diaria": 0, "total": 0},
+  "Nandin": {"diaria": 0, "total": 0},
+  "Lucas": {"diaria": 0, "total": 0},
+  "Dionata": {"diaria": 0, "total": 0},
+  "Ramilson": {"diaria": 0, "total": 0},
+  "Kaio": {"diaria": 0, "total": 0},
+  "Edu": {"diaria": 0, "total": 0}
 }
